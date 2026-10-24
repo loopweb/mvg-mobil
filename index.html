@@ -123,6 +123,7 @@ h2{font-family:var(--font-display);font-weight:700;font-size:18px;margin:0;flex:
 .hint{text-align:center;color:var(--muted);font-size:12.5px;min-height:1.2em}
 
 .stage{position:relative;background:#000;border-radius:12px;overflow:hidden;display:grid;place-items:center;border:1px solid var(--line)}
+.stage.quiet{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;border:0}
 .stage canvas,.stage video{display:block;max-width:100%;max-height:62vh;width:auto;height:auto}
 .prog{height:8px;border-radius:999px;background:var(--surface-2);overflow:hidden}
 .prog i{display:block;height:100%;width:0;background:var(--accent);transition:width .2s linear}
@@ -192,10 +193,11 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:6px 0 4px}
       <label><input type="radio" name="fmt" value="vertical" id="fmtVertical"><b>9:16</b><small>Hoch</small></label>
       <label><input type="radio" name="fmt" value="short58" id="fmtShort"><b>Short</b><small>9:16 · 58s</small></label>
     </div>
-    <span class="sublabel">Qualität</span>
-    <div class="seg c2" role="radiogroup" aria-label="Qualität">
-      <label><input type="radio" name="q" value="720" id="q720" checked><b>720p</b><small>flüssiger am Handy</small></label>
-      <label><input type="radio" name="q" value="1080" id="q1080"><b>1080p</b><small>schärfer</small></label>
+    <span class="sublabel">Gerät</span>
+    <div class="seg c3" role="radiogroup" aria-label="Gerät">
+      <label><input type="radio" name="dev" value="low" id="devLow"><b>Einfach</b><small>480p</small></label>
+      <label><input type="radio" name="dev" value="normal" id="devNormal" checked><b>Normal</b><small>720p</small></label>
+      <label><input type="radio" name="dev" value="high" id="devHigh"><b>Stark</b><small>1080p</small></label>
     </div>
   </section>
 
@@ -221,6 +223,7 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:6px 0 4px}
     <div class="stage" id="stage"><canvas id="cv" width="1280" height="720"></canvas></div>
     <div class="prog" id="progWrap"><i id="prog"></i></div>
     <p class="muted" id="renderStatus" style="margin:0">Bildschirm anlassen und die App nicht wechseln. Gerendert wird in Echtzeit.</p>
+    <div class="warn" id="slowWarn" hidden></div>
     <div class="warn" id="bgWarn" hidden>Die App war kurz im Hintergrund. An dieser Stelle kann das Bild stocken.</div>
     <div class="btns" id="renderBtns"><button class="btn danger" id="cancelBtn" type="button">Abbrechen</button></div>
     <div class="btns" id="resultBtns" hidden>
@@ -245,7 +248,14 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:6px 0 4px}
 (() => {
 "use strict";
 // ---- Konstanten (wie im Desktop-MVG) ----
-const FPS = 30;
+// Geräte-Profile: alles Technische hängt hieran
+const PROFILES = {
+  low:    { short: 480,  long: 854,  fps: 24, vbr: 2.5e6, preview: false, preload: 1 },
+  normal: { short: 720,  long: 1280, fps: 30, vbr: 6e6,   preview: false, preload: 2 },
+  high:   { short: 1080, long: 1920, fps: 30, vbr: 10e6,  preview: true,  preload: 2 }
+};
+const PHOTO_MAX = 1920; // kurze Fotoseite max. 1920 px: reicht für 1080p auch bei 9:16-Ausschnitt, spart Arbeitsspeicher
+const DEV_KEY = "mvgmobil.device";
 const CUT = { gentle: 3.5, slow: 2.2, normal: 1.7, fast: 0.95 };
 const SHORTS_MAX_SEC = 58, SHORTS_FADE_SEC = 2;
 const MIN_PHOTO_SEC = 2.0, MAX_CONSEC_PHOTOS = 2;
@@ -373,8 +383,8 @@ $("mediaIn").addEventListener("change", async e => {
     const url = URL.createObjectURL(f);
     try {
       if (isImg) {
-        const img = new Image(); img.src = url; await img.decode();
-        S.media.push({ id: crypto.randomUUID?.() || String(Math.random()), kind: "photo", url, name: f.name, img, w: img.naturalWidth, h: img.naturalHeight });
+        const ph = await shrinkPhoto(url); URL.revokeObjectURL(url);
+        S.media.push({ id: crypto.randomUUID?.() || String(Math.random()), kind: "photo", url: ph.thumbUrl, name: f.name, img: ph.cv, w: ph.cv.width, h: ph.cv.height });
       } else if (isVid) {
         const dur = await probeVideo(url);
         S.media.push({ id: crypto.randomUUID?.() || String(Math.random()), kind: "video", url, name: f.name, dur });
@@ -384,6 +394,19 @@ $("mediaIn").addEventListener("change", async e => {
   if (bad) toast(bad === 1 ? "Eine Datei kann hier nicht abgespielt werden und wurde übersprungen." : bad + " Dateien können hier nicht abgespielt werden und wurden übersprungen.");
   renderGrid(); updateReady();
 });
+async function shrinkPhoto(url) {
+  const img = new Image(); img.src = url; await img.decode();
+  const w0 = img.naturalWidth, h0 = img.naturalHeight; if (!w0 || !h0) throw new Error("bad");
+  const k = Math.min(1, PHOTO_MAX / Math.min(w0, h0));
+  const c = document.createElement("canvas"); c.width = Math.round(w0 * k); c.height = Math.round(h0 * k);
+  c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+  const kt = Math.min(1, 240 / Math.max(w0, h0));
+  const t = document.createElement("canvas"); t.width = Math.round(w0 * kt); t.height = Math.round(h0 * kt);
+  t.getContext("2d").drawImage(c, 0, 0, t.width, t.height);
+  img.src = "";
+  const blob = await new Promise(r => t.toBlob(r, "image/jpeg", 0.85));
+  return { cv: c, thumbUrl: URL.createObjectURL(blob) };
+}
 function probeVideo(url) {
   return new Promise((res, rej) => {
     const v = document.createElement("video"); v.muted = true; v.preload = "metadata"; v.playsInline = true;
@@ -432,6 +455,13 @@ $("introRemove").onclick = () => {
 };
 function updateIntroHint() { $("introShortHint").hidden = !(S.intro && val("fmt") === "short58"); }
 document.querySelectorAll('input[name="fmt"]').forEach(r => r.addEventListener("change", updateIntroHint));
+(function initDevice() {
+  let d = null;
+  try { d = localStorage.getItem(DEV_KEY); } catch {}
+  if (!PROFILES[d]) d = (navigator.deviceMemory && navigator.deviceMemory <= 3) ? "low" : "normal";
+  const el = document.querySelector(`input[name="dev"][value="${d}"]`); if (el) el.checked = true;
+  document.querySelectorAll('input[name="dev"]').forEach(r => r.addEventListener("change", () => { try { localStorage.setItem(DEV_KEY, val("dev")); } catch {} }));
+})();
 $("clearMedia").onclick = () => { S.media.forEach(m => URL.revokeObjectURL(m.url)); S.media = []; renderGrid(); updateReady(); };
 
 $("titleOn").addEventListener("change", e => { $("titleText").disabled = !e.target.checked; $("stepTitle").classList.toggle("done", e.target.checked); });
@@ -490,9 +520,9 @@ function prepare(el, seg) {
 async function startRender() {
   const mime = pickMime();
   if (mime === null || !cv.captureStream) { toast("Dieser Browser kann keine Videos aufnehmen. Bitte Chrome oder ein aktuelles Safari nehmen.", 5000); return; }
-  const fmt = val("fmt"), q = val("q"), speed = val("speed");
+  const fmt = val("fmt"), speed = val("speed"), P = PROFILES[val("dev")] || PROFILES.normal;
   const vertical = fmt !== "normal";
-  const long = q === "1080" ? 1920 : 1280, short = q === "1080" ? 1080 : 720;
+  const long = P.long, short = P.short;
   const W = vertical ? short : long, H = vertical ? long : short;
   const limited = fmt === "short58";
   const dur = limited ? Math.min(S.dur, SHORTS_MAX_SEC) : S.dur;
@@ -528,6 +558,7 @@ async function startRender() {
   if (S.blobUrl) { URL.revokeObjectURL(S.blobUrl); S.blobUrl = null; }
   S.blob = null;
   const stage = $("stage"); stage.querySelector("video")?.remove(); cv.hidden = false;
+  stage.classList.toggle("quiet", !P.preview); $("slowWarn").hidden = true;
   $("renderPanel").hidden = false; $("renderBar").hidden = true;
   ["stepMusic", "stepIntro", "stepMedia", "stepFormat", "stepSpeed", "stepTitle"].forEach(id => $(id).hidden = true);
   $("renderHead").textContent = "Rendert…"; $("renderBtns").hidden = false; $("resultBtns").hidden = true; $("progWrap").hidden = false;
@@ -544,15 +575,15 @@ async function startRender() {
   const dest = A.createMediaStreamDestination();
   const src = A.createBufferSource(); src.buffer = S.abuf;
   const gRec = A.createGain(); src.connect(gRec); gRec.connect(dest); gRec.connect(A.destination);
-  const vStream = cv.captureStream(FPS);
+  const vStream = cv.captureStream(P.fps);
   const stream = new MediaStream([...vStream.getVideoTracks(), ...dest.stream.getAudioTracks()]);
-  const opts = { videoBitsPerSecond: q === "1080" ? 10e6 : 6e6, audioBitsPerSecond: 192000 };
+  const opts = { videoBitsPerSecond: P.vbr, audioBitsPerSecond: 192000 };
   if (mime) opts.mimeType = mime;
   let rec; try { rec = new MediaRecorder(stream, opts); } catch { rec = new MediaRecorder(stream); }
   const chunks = []; rec.ondataavailable = e => e.data && e.data.size && chunks.push(e.data);
 
   let wake = null; try { wake = await navigator.wakeLock?.request("screen"); } catch {}
-  R = { segs, cur: -1, last: null, rec, src, A, wake, cancelled: false, W, H, dur, vertical, titleOn, title, introLen, raf: 0, chunks, mime: rec.mimeType || mime || "video/webm" };
+  R = { segs, cur: -1, last: null, rec, src, A, wake, cancelled: false, W, H, dur, vertical, titleOn, title, introLen, raf: 0, P, frame: -1, frames: 0, lost: 0, chunks, mime: rec.mimeType || mime || "video/webm" };
 
   drawFrame(0);
   rec.start(1000);
@@ -600,13 +631,14 @@ function drawFrame(t) {
 }
 function activate(i) {
   const { segs } = R; const prev = segs[R.cur]; R.cur = i; const s = segs[i];
+  s.actT = R.A.currentTime - R.t0;
   if (s.m.kind === "video") {
     assign2(i);
     const go = () => { if (R && !R.cancelled && R.cur === i) s.el.play().catch(() => {}); };
     s.ready.then(go);
   }
   if (prev && prev.el && prev.el !== s.el) prev.el.pause();
-  assign2(i + 1); assign2(i + 2);
+  assign2(i + 1); if (R.P.preload > 1) assign2(i + 2);
 }
 function assign2(i) {
   const s = R.segs[i]; if (!s || s.m.kind !== "video" || s.ready) return;
@@ -620,7 +652,17 @@ function assign2(i) {
 function loop() {
   if (!R || R.cancelled) return;
   const t = R.A.currentTime - R.t0;
-  drawFrame(Math.max(0, t));
+  const f = Math.floor(Math.max(0, t) * R.P.fps);
+  if (f !== R.frame) {
+    if (R.frame >= 0 && t > 0.5 && t < R.dur) {
+      R.frames += f - R.frame;
+      if (f - R.frame > 1) R.lost += f - R.frame - 1;            // Gerät kam mit dem Zeichnen nicht nach
+      const s = R.segs[R.cur];
+      if (s && s.m.kind === "video" && s.el && t - (s.actT || 0) > 0.3 && (s.el.seeking || s.el.readyState < 3)) R.lost += 1; // Clip hängt
+    }
+    R.frame = f;
+    drawFrame(Math.max(0, t));
+  }
   const p = Math.min(1, Math.max(0, t / R.dur));
   $("prog").style.width = (p * 100).toFixed(1) + "%";
   $("renderTime").textContent = mmss(Math.max(0, t)) + " / " + mmss(R.dur);
@@ -644,6 +686,13 @@ function finish() {
     $("renderHead").textContent = "Fertig – jetzt speichern";
     $("renderTime").textContent = (S.blob.size / 1048576).toFixed(1) + " MB · " + S.ext.toUpperCase();
     $("renderStatus").textContent = "Vorschau ansehen, dann speichern.";
+    $("stage").classList.remove("quiet");
+    if (r.frames > 0 && r.lost / r.frames > 0.05) {
+      $("slowWarn").textContent = val("dev") === "low"
+        ? "Dein Gerät kam nicht ganz hinterher, das Video kann ruckeln. Weniger oder kleinere Clips helfen."
+        : "Dein Gerät kam nicht ganz hinterher, das Video kann ruckeln. Wähle unter „Gerät“ eine Stufe niedriger.";
+      $("slowWarn").hidden = false;
+    }
     $("progWrap").hidden = true; $("renderBtns").hidden = true; $("resultBtns").hidden = false;
     setupShare();
     S.rendering = false; R = null;
