@@ -5,7 +5,7 @@
 Die mobile Version des **Musik Video Generators (MVG)** von *Don Miguel de Cabarete*.
 Einen Song mit eigenen Clips und Fotos zu einem Musikvideo verbinden, mit Schnitten auf dem Beat und direkt am Handy.
 
-**▶ App öffnen:** https://DEINNAME.github.io/mvg-mobil/
+**▶ App öffnen:** https://loopweb.github.io/mvg-mobil/
 
 Alles läuft im Browser. Musik, Clips und Fotos bleiben auf deinem Gerät und werden nirgends hochgeladen.
 
